@@ -1,0 +1,16 @@
+[Unit]
+Description=TaskForge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/taskforge
+EnvironmentFile=/opt/taskforge/.env
+ExecStart=/usr/bin/python3 -m taskforge serve
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

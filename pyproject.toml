@@ -1,0 +1,13 @@
+[project]
+name = "taskforge"
+version = "0.1.0"
+description = "Task-to-agent automation service with Trello, Codex, git worktree, and GitHub PR adapters."
+requires-python = ">=3.11"
+readme = "README.md"
+license = "MIT"
+
+[project.scripts]
+taskforge = "taskforge.__main__:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

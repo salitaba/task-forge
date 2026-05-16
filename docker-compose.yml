@@ -1,0 +1,13 @@
+services:
+  taskforge:
+    build: .
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${TARGET_REPO:-./example-repo}:${TARGET_REPO:-/workspace/repo}
+      - ${WORKTREE_ROOT:-./worktrees}:${WORKTREE_ROOT:-/workspace/worktrees}
+      - ./data:/data
+    restart: unless-stopped
+
