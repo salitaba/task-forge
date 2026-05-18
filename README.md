@@ -178,8 +178,19 @@ DRY_RUN=false
 Set the command used to run Codex:
 
 ```bash
-CODEX_COMMAND_TEMPLATE='codex exec --cd {workdir} --full-auto --input-file {prompt_file}'
+CODEX_COMMAND_TEMPLATE='codex exec --cd {workdir} --dangerously-bypass-approvals-and-sandbox -'
 ```
+
+When running with Docker Compose, the image installs the Codex CLI and mounts
+`${CODEX_HOME:-/root/.codex}` into the service container so the CLI can use the
+same authentication as the host.
+It also mounts `${SSH_HOME:-/root/.ssh}` read-only so SSH remotes such as
+`git@github.com:owner/repo.git` can be pushed from inside the container.
+The trailing `-` tells `codex exec` to read TaskForge's generated prompt from
+stdin.
+The bypass flag is used because TaskForge runs Codex inside an already isolated
+Docker service; Codex's workspace sandbox can fail in Docker when user
+namespaces are unavailable.
 
 Supported placeholders:
 
@@ -300,6 +311,20 @@ Per-run logs are written inside each worktree:
 ```text
 .codex/logs/
 ```
+
+When running with Docker Compose, stream service logs with:
+
+```bash
+docker compose logs -f --tail=200
+```
+
+The service logs webhook receipt details, queue decisions, worker job lifecycle,
+card validation decisions, runner results, status moves, push/PR steps, and
+errors. Card descriptions and command text are summarized by length instead of
+being printed in full.
+
+The dashboard also exposes a Logs button for each job. For running jobs, it
+polls the current Codex run log so output appears as the subprocess writes it.
 
 ## Safety Settings
 

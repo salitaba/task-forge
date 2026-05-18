@@ -97,6 +97,19 @@ class StateStore:
                 job["payload"] = json.loads(job["payload"])
             return {"processed_actions": actions, "cards": cards, "jobs": jobs}
 
+    def get_job(self, job_id: int) -> dict[str, Any] | None:
+        with self._lock, self._db() as db:
+            row = db.execute(
+                "SELECT id, kind, action_id, payload, status, attempts, last_error, created_at, updated_at "
+                "FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            job = dict(row)
+            job["payload"] = json.loads(job["payload"])
+            return job
+
     def mark_action_processed(self, action_id: str) -> None:
         now = time.time()
         with self._lock, self._db() as db:

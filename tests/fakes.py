@@ -143,10 +143,19 @@ class FakeRunner:
         self.calls: list[dict[str, str]] = []
         self.pushes: list[tuple[str, Path]] = []
 
-    def run(self, event: object, *, existing_branch: str = "", existing_worktree: str = "") -> AgentRunResult:
+    def run(
+        self,
+        event: object,
+        *,
+        existing_branch: str = "",
+        existing_worktree: str = "",
+        on_started: object = None,
+    ) -> AgentRunResult:
         self.calls.append({"existing_branch": existing_branch, "existing_worktree": existing_worktree})
         if self.error:
             raise self.error
+        if callable(on_started):
+            on_started(self.run_result.branch, self.run_result.worktree, self.run_result.worktree / ".codex" / "logs" / "run.log")
         return self.run_result
 
     def push_branch(self, branch: str, worktree: Path) -> None:

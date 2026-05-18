@@ -71,7 +71,11 @@ def task_event_from_trello(payload: dict[str, Any], config: Config) -> CardTaskE
         return None
 
     label_ids = _label_ids(card)
-    if config.trello_start_label_ids and not set(label_ids).intersection(config.trello_start_label_ids):
+    if (
+        config.trello_start_label_ids
+        and _has_label_fields(card)
+        and not set(label_ids).intersection(config.trello_start_label_ids)
+    ):
         return None
 
     return CardTaskEvent(
@@ -96,6 +100,10 @@ def _label_ids(card: dict[str, Any]) -> tuple[str, ...]:
         if label_id:
             label_ids.append(str(label_id))
     return tuple(dict.fromkeys(label_ids))
+
+
+def _has_label_fields(card: dict[str, Any]) -> bool:
+    return "labels" in card or "idLabels" in card
 
 
 def command_event_from_trello(payload: dict[str, Any]) -> CardCommandEvent | None:

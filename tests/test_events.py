@@ -97,6 +97,25 @@ class EventTests(unittest.TestCase):
 
         self.assertIsNone(event)
 
+    def test_required_start_label_allows_partial_move_payload_for_refresh(self) -> None:
+        payload = {
+            "action": {
+                "id": "action-1",
+                "type": "updateCard",
+                "data": {
+                    "listBefore": {"id": "backlog"},
+                    "listAfter": {"id": "todo"},
+                    "card": {"id": "card-1", "name": "Fix bug"},
+                },
+            }
+        }
+
+        event = task_event_from_trello(payload, test_config(trello_start_label_ids=("start-label",)))
+
+        self.assertIsNotNone(event)
+        assert event is not None
+        self.assertEqual(event.label_ids, ())
+
     def test_comment_command_is_parsed(self) -> None:
         payload = {
             "action": {

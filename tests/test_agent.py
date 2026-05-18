@@ -66,7 +66,7 @@ class AgentTests(unittest.TestCase):
 
     def test_build_command_expands_placeholders_without_shell(self) -> None:
         runner = CodexWorktreeRunner(
-            test_config(codex_command_template="codex exec --cd {workdir} --input-file {prompt_file}")
+            test_config(codex_command_template="codex exec --cd {workdir} -")
         )
 
         command = runner._build_command(
@@ -76,7 +76,17 @@ class AgentTests(unittest.TestCase):
             prompt_file=Path("/tmp/prompt file.md"),
         )
 
-        self.assertEqual(command, ["codex", "exec", "--cd", "/tmp/work tree", "--input-file", "/tmp/prompt file.md"])
+        self.assertEqual(command, ["codex", "exec", "--cd", "/tmp/work tree", "-"])
+
+    def test_prompt_stdin_reads_prompt_when_command_ends_with_dash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.md"
+            prompt_file.write_text("do the task", encoding="utf-8")
+            runner = CodexWorktreeRunner(test_config())
+
+            prompt_stdin = runner._prompt_stdin(["codex", "exec", "-"], prompt_file)
+
+            self.assertEqual(prompt_stdin, "do the task")
 
     def test_run_creates_worktree_runs_command_and_commits_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -90,6 +100,7 @@ class AgentTests(unittest.TestCase):
                         "from pathlib import Path",
                         "import json, sys",
                         "workdir = Path(sys.argv[1])",
+                        "print('running task')",
                         "(workdir / 'feature.txt').write_text('done', encoding='utf-8')",
                         "result_dir = workdir / '.codex'",
                         "result_dir.mkdir(exist_ok=True)",
@@ -106,15 +117,23 @@ class AgentTests(unittest.TestCase):
                     state_file=root / "state.json",
                 )
             )
+            started = []
 
-            run = runner.run(self._event())
+            run = runner.run(
+                self._event(),
+                on_started=lambda branch, worktree, log_file: started.append((branch, worktree, log_file)),
+            )
 
             self.assertEqual(run.exit_code, 0)
             self.assertEqual(run.status, "review")
             self.assertIn("feature.txt", run.changed_files)
             self.assertTrue(run.head_sha)
             self.assertTrue((run.worktree / "feature.txt").exists())
-            self.assertTrue(list((run.worktree / ".codex" / "logs").glob("run-*.log")))
+            logs = list((run.worktree / ".codex" / "logs").glob("run-*.log"))
+            self.assertTrue(logs)
+            self.assertIn("running task", logs[0].read_text(encoding="utf-8"))
+            self.assertEqual(started[0][1], run.worktree)
+            self.assertEqual(started[0][2], logs[0])
 
     def test_run_timeout_returns_question_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

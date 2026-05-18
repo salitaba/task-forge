@@ -113,7 +113,7 @@ class Config:
             worktree_root=Path(_env("WORKTREE_ROOT", "./worktrees")).expanduser().resolve(),
             codex_command_template=_env(
                 "CODEX_COMMAND_TEMPLATE",
-                "codex exec --cd {workdir} --full-auto --input-file {prompt_file}",
+                "codex exec --cd {workdir} --dangerously-bypass-approvals-and-sandbox -",
             ),
             codex_timeout_seconds=_env_int("CODEX_TIMEOUT_SECONDS", 7200),
             max_concurrent_jobs=_env_int("MAX_CONCURRENT_JOBS", 1),

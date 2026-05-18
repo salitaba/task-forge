@@ -12,6 +12,17 @@ class GitHubClient:
     def __init__(self, config: Config):
         self.config = config
 
+    def _repo_path(self) -> str:
+        repo = self.config.github_repo.strip()
+        if repo.startswith("git@github.com:"):
+            repo = repo.removeprefix("git@github.com:")
+        elif repo.startswith("https://github.com/"):
+            repo = repo.removeprefix("https://github.com/")
+        elif repo.startswith("http://github.com/"):
+            repo = repo.removeprefix("http://github.com/")
+        repo = repo.removesuffix(".git").strip("/")
+        return urllib.parse.quote(repo, safe="/")
+
     def _request(self, method: str, path: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         self.config.require_github()
         url = f"{self.config.github_api_url.rstrip('/')}{path}"
@@ -33,7 +44,7 @@ class GitHubClient:
             return json.loads(payload) if payload else {}
 
     def create_pull_request(self, *, branch: str, title: str, body: str) -> dict[str, Any]:
-        repo = urllib.parse.quote(self.config.github_repo, safe="/")
+        repo = self._repo_path()
         return self._request(
             "POST",
             f"/repos/{repo}/pulls",
@@ -47,6 +58,5 @@ class GitHubClient:
         )
 
     def combined_status(self, sha: str) -> dict[str, Any]:
-        repo = urllib.parse.quote(self.config.github_repo, safe="/")
+        repo = self._repo_path()
         return self._request("GET", f"/repos/{repo}/commits/{sha}/status")
-

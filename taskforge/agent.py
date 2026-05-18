@@ -7,6 +7,7 @@ import time
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from .config import Config
 from .events import CardTaskEvent
@@ -40,6 +41,7 @@ class CodexWorktreeRunner:
         *,
         existing_branch: str = "",
         existing_worktree: str = "",
+        on_started: Callable[[str, Path, Path], None] | None = None,
     ) -> AgentRunResult:
         self.config.require_safe_repo()
         branch, worktree = self._prepare_worktree(
@@ -48,28 +50,38 @@ class CodexWorktreeRunner:
             existing_worktree=existing_worktree,
         )
         prompt_file = self._write_prompt(event, branch, worktree, resumed=bool(existing_worktree))
+        log_file = self._new_log_file(worktree)
+        if on_started is not None:
+            on_started(branch, worktree, log_file)
         command = self._build_command(event, branch, worktree, prompt_file)
+        prompt_stdin = self._prompt_stdin(command, prompt_file)
 
         timed_out = False
         try:
-            completed = subprocess.run(
-                command,
-                cwd=worktree,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=self.config.codex_timeout_seconds,
-                check=False,
-            )
-            exit_code = completed.returncode
-            output = completed.stdout
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            exit_code = 124
-            output = (exc.stdout or "") + "\nCodex command timed out."
+            with log_file.open("w", encoding="utf-8", buffering=1) as log:
+                process = subprocess.Popen(
+                    command,
+                    cwd=worktree,
+                    text=True,
+                    stdin=subprocess.PIPE if prompt_stdin is not None else None,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                )
+                try:
+                    process.communicate(input=prompt_stdin, timeout=self.config.codex_timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    process.kill()
+                    process.communicate()
+                    log.write("\nCodex command timed out.\n")
+                exit_code = 124 if timed_out else process.returncode
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            raise FileNotFoundError(command[0] if command else None) from exc
 
-        output = output[-8000:]
-        self._write_log(worktree, output)
+        output = self._read_log_tail(log_file)
+
         result_data = self._read_result(worktree)
         if timed_out:
             result_data = {
@@ -81,8 +93,8 @@ class CodexWorktreeRunner:
             commit = self.commit_changes(worktree, f"Implement Trello card {event.card_short_id}: {event.card_name}")
             if commit.returncode != 0:
                 exit_code = commit.returncode
-                output = (output + "\n" + commit.stdout)[-8000:]
-                self._write_log(worktree, output)
+                self._append_log(log_file, "\n" + commit.stdout)
+                output = self._read_log_tail(log_file)
                 result_data = {
                     "status": "question",
                     "summary": "Implementation completed but could not be committed.",
@@ -209,6 +221,11 @@ class CodexWorktreeRunner:
         rendered = self.config.codex_command_template.format(**values)
         return shlex.split(rendered)
 
+    def _prompt_stdin(self, command: list[str], prompt_file: Path) -> str | None:
+        if command and command[-1] == "-":
+            return prompt_file.read_text(encoding="utf-8")
+        return None
+
     def push_branch(self, branch: str, worktree: Path) -> None:
         subprocess.run(
             ["git", "-C", str(worktree), "push", "-u", self.config.remote_name, branch],
@@ -270,11 +287,20 @@ class CodexWorktreeRunner:
             check=False,
         )
 
-    def _write_log(self, worktree: Path, output: str) -> None:
+    def _new_log_file(self, worktree: Path) -> Path:
         log_dir = worktree / ".codex" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"run-{time.strftime('%Y%m%d-%H%M%S')}.log"
-        log_file.write_text(output, encoding="utf-8")
+        return log_dir / f"run-{time.strftime('%Y%m%d-%H%M%S')}.log"
+
+    def _append_log(self, log_file: Path, output: str) -> None:
+        with log_file.open("a", encoding="utf-8") as log:
+            log.write(output)
+
+    def _read_log_tail(self, log_file: Path, limit: int = 8000) -> str:
+        try:
+            return log_file.read_text(encoding="utf-8", errors="replace")[-limit:]
+        except OSError:
+            return ""
 
     def _read_result(self, worktree: Path) -> dict[str, str]:
         result_file = worktree / ".codex" / "trello-result.json"

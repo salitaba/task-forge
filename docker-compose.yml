@@ -8,6 +8,7 @@ services:
     volumes:
       - ${TARGET_REPO:-./example-repo}:${TARGET_REPO:-/workspace/repo}
       - ${WORKTREE_ROOT:-./worktrees}:${WORKTREE_ROOT:-/workspace/worktrees}
+      - ${CODEX_HOME:-/root/.codex}:/root/.codex
+      - ${SSH_HOME:-/root/.ssh}:/root/.ssh:ro
       - ./data:/data
     restart: unless-stopped
-
