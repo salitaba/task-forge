@@ -251,6 +251,9 @@ Run with Docker:
 docker compose up --build
 ```
 
+Docker Compose stores Taskforge state in `./data` by default so card
+branch/worktree records survive container rebuilds.
+
 There is also a systemd template:
 
 ```text
@@ -304,6 +307,11 @@ Trello comment commands:
 ```bash
 STATE_FILE=.taskforge-state.sqlite3
 ```
+
+When running with Docker Compose, `STATE_FILE` is overridden to
+`/data/taskforge-state.sqlite3` unless `TASKFORGE_STATE_FILE` is set. The
+compose file mounts `./data` at `/data`, so review feedback commands can reuse
+the recorded branch/worktree after the container is recreated.
 
 If the service restarts, running jobs are requeued. If a card was already marked
 running for the same Trello action, the worker can resume the existing branch and

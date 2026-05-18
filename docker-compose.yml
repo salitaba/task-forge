@@ -3,6 +3,8 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      STATE_FILE: ${TASKFORGE_STATE_FILE:-/data/taskforge-state.sqlite3}
     ports:
       - "8080:8080"
     volumes:
