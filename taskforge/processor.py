@@ -96,10 +96,172 @@ class TaskProcessor:
             self.trello.add_comment(event.card_id, f"Cleanup result: `{result}`")
             return
 
+        if event.command == "feedback":
+            logger.info("command_decision decision=review_feedback card_id=%s action_id=%s", event.card_id, event.action_id)
+            self._process_review_feedback(event)
+            return
+
         logger.info("command_decision decision=help card_id=%s action_id=%s command=%s", event.card_id, event.action_id, event.command)
         self.trello.add_comment(
             event.card_id,
-            "Supported commands: `/codex retry`, `/codex stop`, `/codex done`, `/codex cleanup`.",
+            "Supported commands: `/codex retry`, `/codex stop`, `/codex done`, `/codex cleanup`, "
+            "or `/codex <review feedback>` on a card in Review.",
+        )
+
+    def _process_review_feedback(self, event: CardCommandEvent) -> None:
+        existing = self.state.get_card(event.card_id)
+        card = self._safe_get_card(event.card_id)
+        if not self._is_review_feedback_card(event, existing, card):
+            logger.info(
+                "review_feedback_decision decision=help reason=not_review_card card_id=%s action_id=%s status=%s list_id=%s",
+                event.card_id,
+                event.action_id,
+                existing.get("status", ""),
+                event.list_id or card.get("idList", ""),
+            )
+            self.trello.add_comment(
+                event.card_id,
+                "Review feedback commands only run for cards in Review. Supported commands: "
+                "`/codex retry`, `/codex stop`, `/codex done`, `/codex cleanup`.",
+            )
+            return
+
+        if existing.get("status") == "running":
+            logger.info("review_feedback_decision decision=ignore reason=already_running card_id=%s action_id=%s", event.card_id, event.action_id)
+            self.trello.add_comment(event.card_id, "Codex is already running for this card.")
+            return
+
+        existing_branch = str(existing.get("branch", ""))
+        existing_worktree = str(existing.get("worktree", ""))
+        if not existing_branch or not existing_worktree:
+            logger.info("review_feedback_decision decision=question reason=missing_branch_or_worktree card_id=%s action_id=%s", event.card_id, event.action_id)
+            self.state.set_card(event.card_id, status="question")
+            self._set_status(event.card_id, "question")
+            self.trello.add_comment(
+                event.card_id,
+                "I can only apply review feedback when this card has a recorded branch and worktree from the initial run. "
+                "Move it back to To Do or run it manually to recreate the implementation context.",
+            )
+            return
+
+        feedback = self._review_feedback_text(event.text)
+        review_event = self._review_feedback_task_event(event, card, feedback)
+        self.state.set_card(event.card_id, status="running", action_id=event.action_id)
+        self._set_status(event.card_id, "running")
+        self.trello.add_comment(
+            event.card_id,
+            "Codex picked up this tech lead review comment. Reusing the existing branch and worktree to update the PR.",
+        )
+
+        try:
+            result = self.runner.run(
+                review_event,
+                existing_branch=existing_branch,
+                existing_worktree=existing_worktree,
+                on_started=lambda branch, worktree, log_file: self.state.set_card(
+                    event.card_id,
+                    status="running",
+                    action_id=event.action_id,
+                    branch=branch,
+                    worktree=str(worktree),
+                    log_path=str(log_file),
+                ),
+            )
+        except subprocess.CalledProcessError as exc:
+            output = (exc.stderr or exc.stdout or str(exc))[-3000:]
+            logger.warning("review_feedback_runner_failed card_id=%s reason=git_command_error output_chars=%s", event.card_id, len(output))
+            self._failed(review_event, f"Could not prepare the existing git worktree.\n\n```text\n{output}\n```")
+            return
+        except FileNotFoundError as exc:
+            logger.warning("review_feedback_runner_failed card_id=%s reason=file_not_found filename=%s", event.card_id, exc.filename)
+            self._failed(review_event, f"Codex or git command was not found: `{exc.filename}`.")
+            return
+        except Exception:
+            logger.exception("review_feedback_runner_failed card_id=%s reason=unexpected_exception", event.card_id)
+            self._failed(review_event, f"Unexpected runner failure.\n\n```text\n{traceback.format_exc()[-3000:]}\n```")
+            return
+
+        logger.info(
+            "review_feedback_runner_finished action_id=%s card_id=%s exit_code=%s status=%s branch=%r worktree=%r changed_files=%s head_sha=%r",
+            event.action_id,
+            event.card_id,
+            result.exit_code,
+            result.status,
+            result.branch,
+            str(result.worktree),
+            ",".join(result.changed_files),
+            result.head_sha,
+        )
+        if result.exit_code == 0 and result.status in {"review", "done"}:
+            pr = self._publish(review_event, result, existing_pr_url=str(existing.get("pr_url", "")))
+            if pr.get("error"):
+                logger.info("review_feedback_decision decision=question reason=publish_error action_id=%s card_id=%s", event.action_id, event.card_id)
+                self._question(review_event, str(pr["error"]))
+                return
+
+            final_status = "done" if result.status == "done" else "review"
+            self.state.set_card(
+                event.card_id,
+                status=final_status,
+                branch=result.branch,
+                worktree=str(result.worktree),
+                pr_url=pr.get("url", "") or str(existing.get("pr_url", "")),
+                head_sha=result.head_sha,
+            )
+            lines = [
+                "Codex addressed the tech lead review feedback and updated the PR.",
+                "",
+                f"Branch: `{result.branch}`",
+                f"Worktree: `{result.worktree}`",
+            ]
+            if pr.get("url") or existing.get("pr_url"):
+                lines.append(f"Pull request: {pr.get('url') or existing.get('pr_url')}")
+            if pr.get("ci_state"):
+                lines.append(f"GitHub commit status: `{pr['ci_state']}`")
+            if result.changed_files:
+                lines.extend(["", "Changed files:", *[f"- `{path}`" for path in result.changed_files]])
+            if result.summary:
+                lines.extend(["", result.summary])
+            self.trello.add_comment(event.card_id, "\n".join(lines))
+            self._set_status(event.card_id, final_status)
+            if final_status == "done" and self.trello.config.trello_done_list_id:
+                self.trello.move_card(event.card_id, self.trello.config.trello_done_list_id)
+            elif final_status == "review" and self.trello.config.trello_review_list_id:
+                self.trello.move_card(event.card_id, self.trello.config.trello_review_list_id)
+            return
+
+        if result.exit_code == 0 and result.status == "question":
+            self._question(
+                review_event,
+                "\n".join(
+                    [
+                        "Codex needs input before it can address the tech lead review feedback.",
+                        "",
+                        result.question or result.summary or "No question was provided.",
+                        "",
+                        f"Branch: `{result.branch}`",
+                        f"Worktree: `{result.worktree}`",
+                    ]
+                ),
+            )
+            return
+
+        self._question(
+            review_event,
+            "\n".join(
+                [
+                    "Codex stopped before completing the review feedback and needs attention.",
+                    "",
+                    "Last output:",
+                    "",
+                    "```text",
+                    result.output[-3000:],
+                    "```",
+                    "",
+                    f"Branch: `{result.branch}`",
+                    f"Worktree: `{result.worktree}`",
+                ]
+            ),
         )
 
     def _process(self, event: CardTaskEvent) -> None:
@@ -408,6 +570,60 @@ class TaskProcessor:
             label_ids=self._label_ids(card) or event.label_ids,
         )
 
+    def _safe_get_card(self, card_id: str) -> dict[str, object]:
+        try:
+            logger.info("trello_card_refresh_start card_id=%s source=command", card_id)
+            return self.trello.get_card(card_id)
+        except Exception as exc:
+            logger.warning("trello_card_refresh_failed card_id=%s source=command error=%s", card_id, exc)
+            return {}
+
+    def _is_review_feedback_card(
+        self,
+        event: CardCommandEvent,
+        existing: dict[str, object],
+        card: dict[str, object],
+    ) -> bool:
+        review_list_id = self.trello.config.trello_review_list_id
+        return (
+            existing.get("status") == "review"
+            or bool(review_list_id and event.list_id == review_list_id)
+            or bool(review_list_id and card.get("idList") == review_list_id)
+        )
+
+    def _review_feedback_text(self, text: str) -> str:
+        parts = text.strip().split(maxsplit=1)
+        return parts[1].strip() if len(parts) > 1 else "Please address the latest tech lead review feedback."
+
+    def _review_feedback_task_event(
+        self,
+        event: CardCommandEvent,
+        card: dict[str, object],
+        feedback: str,
+    ) -> CardTaskEvent:
+        description = str(card.get("desc") or "")
+        feedback_section = "\n".join(
+            [
+                "",
+                "## Tech Lead Review Feedback",
+                "",
+                feedback,
+                "",
+                "Update the existing implementation for this review comment, keep the changes focused, "
+                "and preserve the pull request branch.",
+            ]
+        )
+        return CardTaskEvent(
+            action_id=event.action_id,
+            card_id=event.card_id,
+            card_short_id=str(card.get("idShort") or event.card_id[-6:]),
+            card_name=str(card.get("name") or "Trello review feedback"),
+            card_url=str(card.get("shortUrl") or card.get("url") or ""),
+            description=f"{description}\n{feedback_section}" if description else feedback_section.strip(),
+            source="tech lead review comment",
+            label_ids=self._label_ids(card),
+        )
+
     def _has_start_label(self, event: CardTaskEvent) -> bool:
         required = set(self.runner.config.trello_start_label_ids)
         if not required:
@@ -424,10 +640,10 @@ class TaskProcessor:
                 label_ids.append(str(label_id))
         return tuple(dict.fromkeys(label_ids))
 
-    def _publish(self, event: CardTaskEvent, result: object) -> dict[str, str]:
+    def _publish(self, event: CardTaskEvent, result: object, *, existing_pr_url: str = "") -> dict[str, str]:
         if not (self.runner.config.enable_git_push or self.runner.config.enable_pr_creation):
             logger.info("publish_skipped card_id=%s branch=%s reason=disabled", event.card_id, result.branch)
-            return {}
+            return {"url": existing_pr_url} if existing_pr_url else {}
         try:
             logger.info("publish_push_start card_id=%s branch=%s worktree=%s", event.card_id, result.branch, result.worktree)
             self.runner.push_branch(result.branch, result.worktree)
@@ -435,6 +651,19 @@ class TaskProcessor:
             output = (exc.stderr or exc.stdout or str(exc))[-3000:]
             logger.warning("publish_push_failed card_id=%s branch=%s output_chars=%s", event.card_id, result.branch, len(output))
             return {"error": f"Implementation is ready, but pushing the branch failed.\n\n```text\n{output}\n```"}
+
+        if existing_pr_url:
+            response = {"url": existing_pr_url}
+            if result.head_sha and self.github is not None:
+                try:
+                    logger.info("publish_ci_status_start card_id=%s head_sha=%s", event.card_id, result.head_sha)
+                    status = self.github.combined_status(result.head_sha)
+                    response["ci_state"] = str(status.get("state", ""))
+                except Exception as exc:
+                    response["ci_state"] = f"unknown ({exc})"
+                    logger.warning("publish_ci_status_failed card_id=%s head_sha=%s error=%s", event.card_id, result.head_sha, exc)
+            logger.info("publish_pr_reused card_id=%s branch=%s url=%r ci_state=%r", event.card_id, result.branch, response.get("url", ""), response.get("ci_state", ""))
+            return response
 
         if not self.runner.config.enable_pr_creation:
             logger.info("publish_pr_skipped card_id=%s branch=%s reason=pr_creation_disabled", event.card_id, result.branch)

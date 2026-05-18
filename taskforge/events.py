@@ -26,6 +26,7 @@ class CardCommandEvent:
     command: str
     text: str
     source: str
+    list_id: str = ""
 
 
 def task_event_to_payload(event: CardTaskEvent) -> dict[str, Any]:
@@ -113,6 +114,7 @@ def command_event_from_trello(payload: dict[str, Any]) -> CardCommandEvent | Non
 
     data = action.get("data") or {}
     card = data.get("card") or {}
+    list_data = data.get("list") or {}
     text = str(data.get("text") or "").strip()
     if not card.get("id") or not text.lower().startswith("/codex"):
         return None
@@ -120,7 +122,7 @@ def command_event_from_trello(payload: dict[str, Any]) -> CardCommandEvent | Non
     parts = text.split()
     command = parts[1].lower() if len(parts) > 1 else "help"
     if command not in {"retry", "stop", "done", "cleanup", "help"}:
-        command = "help"
+        command = "feedback"
 
     return CardCommandEvent(
         action_id=action["id"],
@@ -128,4 +130,5 @@ def command_event_from_trello(payload: dict[str, Any]) -> CardCommandEvent | Non
         command=command,
         text=text,
         source="trello comment command",
+        list_id=str(list_data.get("id") or ""),
     )

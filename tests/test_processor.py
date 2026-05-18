@@ -234,6 +234,65 @@ class ProcessorTests(unittest.TestCase):
         self.assertIn("Pull request: https://github.test/owner/repo/pull/1", trello.comments[-1][1])
         self.assertIn("GitHub commit status: `pending`", trello.comments[-1][1])
 
+    def test_review_feedback_command_reuses_existing_branch_and_pr(self) -> None:
+        cfg = self.cfg(
+            enable_git_push=True,
+            enable_pr_creation=True,
+            github_token="token",
+            github_repo="owner/repo",
+        )
+        github = FakeGitHub(ci_state="pending")
+        runner = FakeRunner(
+            cfg,
+            result(
+                status="review",
+                branch="codex/existing",
+                worktree=Path("/tmp/existing"),
+                changed_files=("app.py", "tests/test_app.py"),
+            ),
+        )
+        processor, state, trello, runner = self.make_processor(config=cfg, runner=runner, github=github)
+        state.set_card(
+            "card-1",
+            status="review",
+            branch="codex/existing",
+            worktree="/tmp/existing",
+            pr_url="https://github.test/owner/repo/pull/1",
+        )
+
+        processor.process_command(
+            CardCommandEvent(
+                "cmd-1",
+                "card-1",
+                "feedback",
+                "/codex add regression coverage",
+                "comment",
+                list_id="review",
+            )
+        )
+
+        self.assertEqual(runner.calls[0]["existing_branch"], "codex/existing")
+        self.assertEqual(runner.calls[0]["existing_worktree"], "/tmp/existing")
+        self.assertIn("Tech Lead Review Feedback", runner.calls[0]["event"].description)
+        self.assertIn("add regression coverage", runner.calls[0]["event"].description)
+        self.assertEqual(runner.pushes, [("codex/existing", Path("/tmp/existing"))])
+        self.assertEqual(github.created_prs, [])
+        self.assertEqual(state.card_status("card-1"), "review")
+        self.assertEqual(state.get_card("card-1")["pr_url"], "https://github.test/owner/repo/pull/1")
+        self.assertIn("updated the PR", trello.comments[-1][1])
+        self.assertIn("GitHub commit status: `pending`", trello.comments[-1][1])
+
+    def test_review_feedback_command_outside_review_lists_supported_commands(self) -> None:
+        cfg = self.cfg()
+        processor, state, trello, runner = self.make_processor(config=cfg)
+
+        processor.process_command(
+            CardCommandEvent("cmd-1", "card-1", "feedback", "/codex add tests", "comment")
+        )
+
+        self.assertEqual(runner.calls, [])
+        self.assertIn("only run for cards in Review", trello.comments[-1][1])
+
     def test_push_failure_moves_back_to_question(self) -> None:
         class PushFailRunner(FakeRunner):
             def push_branch(self, branch: str, worktree: Path) -> None:

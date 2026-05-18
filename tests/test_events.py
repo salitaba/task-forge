@@ -131,12 +131,12 @@ class EventTests(unittest.TestCase):
         assert command is not None
         self.assertEqual(command.command, "cleanup")
 
-    def test_unknown_comment_command_becomes_help(self) -> None:
+    def test_unknown_comment_command_becomes_feedback(self) -> None:
         payload = {
             "action": {
                 "id": "cmd-1",
                 "type": "commentCard",
-                "data": {"card": {"id": "card-1"}, "text": "/codex wat"},
+                "data": {"card": {"id": "card-1"}, "list": {"id": "review"}, "text": "/codex wat"},
             }
         }
 
@@ -144,7 +144,8 @@ class EventTests(unittest.TestCase):
 
         self.assertIsNotNone(command)
         assert command is not None
-        self.assertEqual(command.command, "help")
+        self.assertEqual(command.command, "feedback")
+        self.assertEqual(command.list_id, "review")
 
 
 if __name__ == "__main__":

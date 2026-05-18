@@ -64,7 +64,7 @@ class TrelloClient:
         return self._request(
             "GET",
             f"/cards/{card_id}",
-            query={"fields": "name,desc,url,shortUrl,idShort,idLabels,labels"},
+            query={"fields": "name,desc,url,shortUrl,idShort,idList,idLabels,labels"},
         )
 
     def add_label(self, card_id: str, label_id: str) -> dict[str, Any]:

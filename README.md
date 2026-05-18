@@ -293,6 +293,9 @@ Trello comment commands:
 - `/codex done`
 - `/codex cleanup`
 - `/codex help`
+- `/codex <review feedback>` on a card in the Review list resumes the recorded
+  branch/worktree, asks Codex to address the tech lead comment, pushes the branch,
+  and keeps the existing PR URL on the card.
 
 ## State, Jobs, And Logs
 

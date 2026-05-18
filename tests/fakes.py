@@ -106,6 +106,7 @@ class FakeTrello:
             "name": "Build invite flow",
             "desc": self.desc,
             "shortUrl": "https://trello.test/c/abc",
+            "idList": self.config.trello_todo_list_id,
             "idLabels": list(self.label_ids),
             "labels": [{"id": label_id} for label_id in self.label_ids],
         }
@@ -151,7 +152,7 @@ class FakeRunner:
         existing_worktree: str = "",
         on_started: object = None,
     ) -> AgentRunResult:
-        self.calls.append({"existing_branch": existing_branch, "existing_worktree": existing_worktree})
+        self.calls.append({"event": event, "existing_branch": existing_branch, "existing_worktree": existing_worktree})
         if self.error:
             raise self.error
         if callable(on_started):
