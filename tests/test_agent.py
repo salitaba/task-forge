@@ -135,6 +135,55 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(started[0][1], run.worktree)
             self.assertEqual(started[0][2], logs[0])
 
+    def test_run_refreshes_main_before_creating_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._git_repo(root / "source")
+            origin = root / "origin.git"
+            target = root / "target"
+            subprocess.run(["git", "clone", "--bare", str(source), str(origin)], check=True, stdout=subprocess.PIPE)
+            subprocess.run(["git", "clone", str(origin), str(target)], check=True, stdout=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(target), "config", "user.email", "test@example.com"], check=True)
+            subprocess.run(["git", "-C", str(target), "config", "user.name", "Test User"], check=True)
+
+            subprocess.run(["git", "-C", str(source), "remote", "add", "origin", str(origin)], check=True)
+            (source / "README.md").write_text("updated", encoding="utf-8")
+            subprocess.run(["git", "-C", str(source), "add", "README.md"], check=True)
+            subprocess.run(["git", "-C", str(source), "commit", "-m", "Update main"], check=True, stdout=subprocess.PIPE)
+            subprocess.run(["git", "-C", str(source), "push", "origin", "main"], check=True, stdout=subprocess.PIPE)
+
+            script = root / "codex_stub.py"
+            script.write_text(
+                "\n".join(
+                    [
+                        "from pathlib import Path",
+                        "import json, sys",
+                        "workdir = Path(sys.argv[1])",
+                        "(workdir / 'feature.txt').write_text('done', encoding='utf-8')",
+                        "result_dir = workdir / '.codex'",
+                        "result_dir.mkdir(exist_ok=True)",
+                        "(result_dir / 'trello-result.json').write_text(json.dumps({'status':'review','summary':'ok','question':''}), encoding='utf-8')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            runner = CodexWorktreeRunner(
+                test_config(
+                    target_repo=target,
+                    worktree_root=root / "worktrees",
+                    codex_command_template=f"python3 {script} {{workdir}}",
+                    state_file=root / "state.json",
+                )
+            )
+
+            run = runner.run(self._event())
+
+            self.assertEqual(run.exit_code, 0)
+            self.assertEqual((target / "README.md").read_text(encoding="utf-8"), "updated")
+            self.assertEqual((run.worktree / "README.md").read_text(encoding="utf-8"), "updated")
+            self.assertIn("feature.txt", run.changed_files)
+            self.assertNotIn("README.md", run.changed_files)
+
     def test_run_timeout_returns_question_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

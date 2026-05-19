@@ -132,13 +132,8 @@ class CodexWorktreeRunner:
         branch = f"codex/trello-{event.card_short_id}-{slug}-{stamp}"
         worktree = self.config.worktree_root / f"{stamp}-{event.card_short_id}-{slug}"
 
-        subprocess.run(
-            ["git", "-C", str(self.config.target_repo), "rev-parse", "--is-inside-work-tree"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True,
-        )
+        self._git(["rev-parse", "--is-inside-work-tree"])
+        start_point = self._refresh_base_branch()
         subprocess.run(
             [
                 "git",
@@ -149,7 +144,7 @@ class CodexWorktreeRunner:
                 "-b",
                 branch,
                 str(worktree),
-                self.config.base_branch,
+                start_point,
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -157,6 +152,61 @@ class CodexWorktreeRunner:
             check=True,
         )
         return branch, worktree
+
+    def _refresh_base_branch(self) -> str:
+        remote = self.config.remote_name
+        base = self.config.base_branch
+        if not remote or not self._remote_exists(remote):
+            return base
+
+        remote_ref = f"{remote}/{base}"
+        remote_full_ref = f"refs/remotes/{remote}/{base}"
+        local_full_ref = f"refs/heads/{base}"
+
+        self._git(["fetch", "--prune", remote, f"+refs/heads/{base}:{remote_full_ref}"])
+        if not self._ref_exists(remote_full_ref):
+            return base
+        if not self._ref_exists(local_full_ref):
+            self._git(["branch", base, remote_ref])
+            return base
+
+        if self._is_ancestor(local_full_ref, remote_full_ref):
+            if self._current_branch() == base:
+                self._git(["merge", "--ff-only", remote_ref])
+            else:
+                self._git(["branch", "--force", base, remote_ref])
+            return base
+
+        raise subprocess.CalledProcessError(
+            1,
+            ["git", "merge-base", "--is-ancestor", local_full_ref, remote_full_ref],
+            stderr=(
+                f"Local {base!r} has commits that are not on {remote_ref!r}. "
+                "Resolve the branch divergence before starting a task."
+            ),
+        )
+
+    def _git(self, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(self.config.target_repo), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=check,
+        )
+
+    def _remote_exists(self, remote: str) -> bool:
+        return self._git(["remote", "get-url", remote], check=False).returncode == 0
+
+    def _ref_exists(self, ref: str) -> bool:
+        return self._git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], check=False).returncode == 0
+
+    def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        return self._git(["merge-base", "--is-ancestor", ancestor, descendant], check=False).returncode == 0
+
+    def _current_branch(self) -> str:
+        completed = self._git(["symbolic-ref", "--quiet", "--short", "HEAD"], check=False)
+        return completed.stdout.strip() if completed.returncode == 0 else ""
 
     def _write_prompt(self, event: CardTaskEvent, branch: str, worktree: Path, *, resumed: bool) -> Path:
         prompt_dir = worktree / ".codex"

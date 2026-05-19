@@ -202,6 +202,10 @@ Supported placeholders:
 - `{card_name}`
 
 Each task gets its own branch and worktree under `WORKTREE_ROOT`.
+Before creating a new task worktree, TaskForge fetches `REMOTE_NAME` and
+fast-forwards `BASE_BRANCH` so the task branch starts from the latest remote
+base branch. If the local base branch has diverged from the remote branch, the
+task stops so the repository can be reconciled first.
 
 Codex should write this result file before exiting:
 
