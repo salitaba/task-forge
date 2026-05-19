@@ -314,7 +314,7 @@ class TaskProcessor:
             ",".join(event.label_ids),
             len(event.description),
         )
-        if not self._has_start_label(event):
+        if not is_same_running_action and not self._has_start_label(event):
             logger.info(
                 "task_decision decision=ignore reason=missing_start_label action_id=%s card_id=%s required_labels=%s actual_labels=%s",
                 event.action_id,
@@ -326,7 +326,7 @@ class TaskProcessor:
             return
 
         contract = validate_card_contract(event.description, self.runner.config.required_card_sections)
-        if not contract.is_valid:
+        if not is_same_running_action and not contract.is_valid:
             logger.info(
                 "task_decision decision=question reason=invalid_card_contract action_id=%s card_id=%s missing_sections=%s",
                 event.action_id,
@@ -424,7 +424,7 @@ class TaskProcessor:
             result.head_sha,
         )
         if result.exit_code == 0 and result.status == "done":
-            pr = self._publish(event, result)
+            pr = self._publish(event, result, existing_pr_url=str(existing.get("pr_url", "")))
             if pr.get("error"):
                 logger.info("task_decision decision=question reason=publish_error action_id=%s card_id=%s", event.action_id, event.card_id)
                 self._question(event, str(pr["error"]))
@@ -435,7 +435,7 @@ class TaskProcessor:
                 status="done",
                 branch=result.branch,
                 worktree=str(result.worktree),
-                pr_url=pr.get("url", ""),
+                pr_url=pr.get("url", "") or str(existing.get("pr_url", "")),
                 head_sha=result.head_sha,
             )
             lines = [
@@ -458,7 +458,7 @@ class TaskProcessor:
             return
 
         if result.exit_code == 0 and result.status == "review":
-            pr = self._publish(event, result)
+            pr = self._publish(event, result, existing_pr_url=str(existing.get("pr_url", "")))
             if pr.get("error"):
                 logger.info("task_decision decision=question reason=publish_error action_id=%s card_id=%s", event.action_id, event.card_id)
                 self._question(event, str(pr["error"]))
@@ -475,7 +475,7 @@ class TaskProcessor:
                 status="review",
                 branch=result.branch,
                 worktree=str(result.worktree),
-                pr_url=pr.get("url", ""),
+                pr_url=pr.get("url", "") or str(existing.get("pr_url", "")),
                 head_sha=result.head_sha,
             )
             lines = [

@@ -59,6 +59,34 @@ class StateStoreTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertEqual(state.read_all()["jobs"][0]["status"], "queued")
 
+    def test_requeue_stale_running_card_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = StateStore(Path(tmp) / "state.sqlite3")
+            state.enqueue_job(kind="task", action_id="action-1", payload={"card_id": "card-1"})
+            job = state.claim_next_job()
+            assert job is not None
+            state.complete_job(job["id"])
+            state.set_card("card-1", status="running", action_id="action-1")
+
+            count = state.requeue_stale_running_card_jobs()
+
+            self.assertEqual(count, 1)
+            self.assertEqual(state.read_all()["jobs"][0]["status"], "queued")
+
+    def test_requeue_stale_running_card_jobs_ignores_terminal_cards(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = StateStore(Path(tmp) / "state.sqlite3")
+            state.enqueue_job(kind="task", action_id="action-1", payload={"card_id": "card-1"})
+            job = state.claim_next_job()
+            assert job is not None
+            state.complete_job(job["id"])
+            state.set_card("card-1", status="review", action_id="action-1")
+
+            count = state.requeue_stale_running_card_jobs()
+
+            self.assertEqual(count, 0)
+            self.assertEqual(state.read_all()["jobs"][0]["status"], "done")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,7 +41,13 @@ class JobWorker:
 
     def start(self) -> None:
         requeued = self.state.requeue_running_jobs()
-        logger.info("worker_start requeued_jobs=%s poll_interval=%s", requeued, self.poll_interval)
+        stale_requeued = self.state.requeue_stale_running_card_jobs()
+        logger.info(
+            "worker_start requeued_jobs=%s stale_running_card_jobs=%s poll_interval=%s",
+            requeued,
+            stale_requeued,
+            self.poll_interval,
+        )
         self._thread.start()
 
     def stop(self) -> None:

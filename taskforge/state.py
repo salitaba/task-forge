@@ -207,3 +207,26 @@ class StateStore:
                 (now,),
             )
             return cursor.rowcount
+
+    def requeue_stale_running_card_jobs(self) -> int:
+        now = time.time()
+        with self._lock, self._db() as db:
+            rows = db.execute("SELECT data FROM cards").fetchall()
+            action_ids = []
+            for row in rows:
+                card = json.loads(row["data"])
+                action_id = str(card.get("action_id", ""))
+                if card.get("status") == "running" and action_id:
+                    action_ids.append(action_id)
+            if not action_ids:
+                return 0
+
+            cursor = db.executemany(
+                """
+                UPDATE jobs
+                SET status = 'queued', updated_at = ?
+                WHERE action_id = ? AND status NOT IN ('queued', 'running')
+                """,
+                [(now, action_id) for action_id in action_ids],
+            )
+            return cursor.rowcount

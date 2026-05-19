@@ -182,6 +182,58 @@ class ProcessorTests(unittest.TestCase):
         self.assertEqual(runner.calls[0]["existing_branch"], "codex/existing")
         self.assertEqual(state.card_status("card-1"), "review")
 
+    def test_requeued_running_same_action_skips_start_label_gate(self) -> None:
+        cfg = self.cfg(trello_start_label_ids=("start-label",))
+        trello = FakeTrello(cfg, label_ids=())
+        processor, state, trello, runner = self.make_processor(config=cfg, trello=trello)
+        state.mark_action_processed("action-1")
+        state.set_card(
+            "card-1",
+            status="running",
+            action_id="action-1",
+            branch="codex/existing",
+            worktree="/tmp/existing",
+        )
+
+        processor.process(event())
+
+        self.assertEqual(runner.calls[0]["existing_branch"], "codex/existing")
+        self.assertEqual(state.card_status("card-1"), "review")
+
+    def test_requeued_running_same_action_reuses_existing_pr(self) -> None:
+        cfg = self.cfg(
+            enable_git_push=True,
+            enable_pr_creation=True,
+            github_token="token",
+            github_repo="owner/repo",
+        )
+        github = FakeGitHub(ci_state="pending")
+        runner = FakeRunner(
+            cfg,
+            result(
+                status="review",
+                branch="codex/existing",
+                worktree=Path("/tmp/existing"),
+            ),
+        )
+        processor, state, trello, runner = self.make_processor(config=cfg, runner=runner, github=github)
+        state.mark_action_processed("action-1")
+        state.set_card(
+            "card-1",
+            status="running",
+            action_id="action-1",
+            branch="codex/existing",
+            worktree="/tmp/existing",
+            pr_url="https://github.test/owner/repo/pull/1",
+        )
+
+        processor.process(event())
+
+        self.assertEqual(github.created_prs, [])
+        self.assertEqual(runner.pushes, [("codex/existing", Path("/tmp/existing"))])
+        self.assertEqual(state.card_status("card-1"), "review")
+        self.assertEqual(state.get_card("card-1")["pr_url"], "https://github.test/owner/repo/pull/1")
+
     def test_dry_run_validates_but_skips_runner(self) -> None:
         cfg = self.cfg(dry_run=True)
         processor, state, trello, runner = self.make_processor(config=cfg)
