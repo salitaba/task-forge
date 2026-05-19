@@ -282,6 +282,62 @@ class ProcessorTests(unittest.TestCase):
         self.assertIn("updated the PR", trello.comments[-1][1])
         self.assertIn("GitHub commit status: `pending`", trello.comments[-1][1])
 
+    def test_requeued_review_feedback_same_action_can_resume_after_restart(self) -> None:
+        cfg = self.cfg()
+        runner = FakeRunner(
+            cfg,
+            result(
+                status="review",
+                branch="codex/existing",
+                worktree=Path("/tmp/existing"),
+            ),
+        )
+        processor, state, trello, runner = self.make_processor(config=cfg, runner=runner)
+        state.mark_action_processed("cmd-1")
+        state.set_card(
+            "card-1",
+            status="running",
+            action_id="cmd-1",
+            branch="codex/existing",
+            worktree="/tmp/existing",
+            pr_url="https://github.test/owner/repo/pull/1",
+        )
+
+        processor.process_command(
+            CardCommandEvent(
+                "cmd-1",
+                "card-1",
+                "feedback",
+                "/codex add regression coverage",
+                "comment",
+                list_id="review",
+            )
+        )
+
+        self.assertEqual(runner.calls[0]["existing_branch"], "codex/existing")
+        self.assertEqual(runner.calls[0]["existing_worktree"], "/tmp/existing")
+        self.assertEqual(state.card_status("card-1"), "review")
+        self.assertIn("resumed", trello.comments[0][1])
+
+    def test_duplicate_review_feedback_different_running_action_is_ignored(self) -> None:
+        cfg = self.cfg()
+        processor, state, trello, runner = self.make_processor(config=cfg)
+        state.mark_action_processed("cmd-1")
+        state.set_card(
+            "card-1",
+            status="running",
+            action_id="cmd-other",
+            branch="codex/existing",
+            worktree="/tmp/existing",
+        )
+
+        processor.process_command(
+            CardCommandEvent("cmd-1", "card-1", "feedback", "/codex add tests", "comment", list_id="review")
+        )
+
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(trello.comments, [])
+
     def test_review_feedback_command_outside_review_lists_supported_commands(self) -> None:
         cfg = self.cfg()
         processor, state, trello, runner = self.make_processor(config=cfg)

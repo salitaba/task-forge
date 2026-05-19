@@ -319,7 +319,9 @@ the recorded branch/worktree after the container is recreated.
 
 If the service restarts, running jobs are requeued. If a card was already marked
 running for the same Trello action, the worker can resume the existing branch and
-worktree.
+worktree. This also applies to requeued tech lead review feedback commands, so a
+container restart does not leave those in-progress updates permanently skipped as
+duplicate Trello comments.
 
 Per-run logs are written inside each worktree:
 

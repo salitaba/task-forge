@@ -53,10 +53,18 @@ class TaskProcessor:
             event.source,
             len(event.text),
         )
-        if self.state.has_processed_action(event.action_id):
+        existing_before = self.state.get_card(event.card_id)
+        is_same_running_feedback = (
+            event.command == "feedback"
+            and existing_before.get("status") == "running"
+            and existing_before.get("action_id") == event.action_id
+        )
+        action_processed = self.state.has_processed_action(event.action_id)
+        if action_processed and not is_same_running_feedback:
             logger.info("command_decision decision=ignore reason=duplicate_action action_id=%s card_id=%s", event.action_id, event.card_id)
             return
-        self.state.mark_action_processed(event.action_id)
+        if not action_processed:
+            self.state.mark_action_processed(event.action_id)
 
         if event.command == "retry":
             logger.info("command_decision decision=retry card_id=%s action_id=%s", event.card_id, event.action_id)
@@ -98,7 +106,7 @@ class TaskProcessor:
 
         if event.command == "feedback":
             logger.info("command_decision decision=review_feedback card_id=%s action_id=%s", event.card_id, event.action_id)
-            self._process_review_feedback(event)
+            self._process_review_feedback(event, resume_running_action=is_same_running_feedback)
             return
 
         logger.info("command_decision decision=help card_id=%s action_id=%s command=%s", event.card_id, event.action_id, event.command)
@@ -108,10 +116,10 @@ class TaskProcessor:
             "or `/codex <review feedback>` on a card in Review.",
         )
 
-    def _process_review_feedback(self, event: CardCommandEvent) -> None:
+    def _process_review_feedback(self, event: CardCommandEvent, *, resume_running_action: bool = False) -> None:
         existing = self.state.get_card(event.card_id)
         card = self._safe_get_card(event.card_id)
-        if not self._is_review_feedback_card(event, existing, card):
+        if not resume_running_action and not self._is_review_feedback_card(event, existing, card):
             logger.info(
                 "review_feedback_decision decision=help reason=not_review_card card_id=%s action_id=%s status=%s list_id=%s",
                 event.card_id,
@@ -126,7 +134,7 @@ class TaskProcessor:
             )
             return
 
-        if existing.get("status") == "running":
+        if existing.get("status") == "running" and not resume_running_action:
             logger.info("review_feedback_decision decision=ignore reason=already_running card_id=%s action_id=%s", event.card_id, event.action_id)
             self.trello.add_comment(event.card_id, "Codex is already running for this card.")
             return
@@ -148,10 +156,16 @@ class TaskProcessor:
         review_event = self._review_feedback_task_event(event, card, feedback)
         self.state.set_card(event.card_id, status="running", action_id=event.action_id)
         self._set_status(event.card_id, "running")
-        self.trello.add_comment(
-            event.card_id,
-            "Codex picked up this tech lead review comment. Reusing the existing branch and worktree to update the PR.",
-        )
+        if resume_running_action:
+            self.trello.add_comment(
+                event.card_id,
+                "Codex resumed this tech lead review comment after a restart. Reusing the existing branch and worktree to update the PR.",
+            )
+        else:
+            self.trello.add_comment(
+                event.card_id,
+                "Codex picked up this tech lead review comment. Reusing the existing branch and worktree to update the PR.",
+            )
 
         try:
             result = self.runner.run(
